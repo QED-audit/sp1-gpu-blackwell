@@ -65,28 +65,22 @@ public:
         assert(lg_domain_size <= MAX_LG_DOMAIN_SIZE);
 
         size_t domain_size = (size_t)1 << lg_domain_size;
-        // aim to read 4 cache lines of consecutive data per read
-        const uint32_t Z_COUNT = 256 / sizeof(fr_t);
-        const uint32_t bsize = Z_COUNT>WARP_SZ ? Z_COUNT : WARP_SZ;
 
+        // --- QED-audit / GB10 (Grace-Blackwell, sm_121) patch ---
+        // The cache-optimized bit_rev_permutation_z kernels do not launch on the GB10:
+        // __launch_bounds__(192, 2) + their dynamic shared memory exceed the per-block
+        // resource limits reported for this GPU, so the launch is rejected with
+        // cudaErrorLaunchOutOfResources. Fall back to the simple swap-based
+        // bit_rev_permutation kernel, which is in-place safe via its `idx < rev` guard
+        // and uses no dynamic shared memory. Clear any sticky error left unchecked by an
+        // earlier kernel first, so this launch's own status is what we validate.
+        (void)cudaGetLastError();
         if (domain_size <= 1024)
-            bit_rev_permutation<<<1, domain_size, 0, stream>>>
+            bit_rev_permutation<<<1, (unsigned)domain_size, 0, stream>>>
                                (d_out, d_inp, lg_domain_size);
-        else if (domain_size < bsize * Z_COUNT)
-            bit_rev_permutation<<<domain_size / WARP_SZ, WARP_SZ, 0, stream>>>
-                               (d_out, d_inp, lg_domain_size);
-        else if (Z_COUNT > WARP_SZ || lg_domain_size <= 32)
-            bit_rev_permutation_z<Z_COUNT><<<domain_size / Z_COUNT / bsize, bsize,
-                                             bsize * Z_COUNT * sizeof(fr_t),
-                                             stream>>>
-                                 (d_out, d_inp, lg_domain_size);
         else
-            // Those GPUs that can reserve 96KB of shared memory can
-            // schedule 2 blocks to each SM...
-            bit_rev_permutation_z<Z_COUNT><<<sm_count()*2, 192,
-                                             192 * Z_COUNT * sizeof(fr_t),
-                                             stream>>>
-                                 (d_out, d_inp, lg_domain_size);
+            bit_rev_permutation<<<(unsigned)(domain_size / WARP_SZ), WARP_SZ, 0, stream>>>
+                               (d_out, d_inp, lg_domain_size);
 
         CUDA_UNWRAP_SPPARK(cudaGetLastError());
     }

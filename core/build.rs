@@ -186,9 +186,18 @@ fn main() {
         cc_builder.flag("-lnvToolsExt");
         cc_builder.flag("-ldl");
         cc_builder.flag("--expt-relaxed-constexpr");
-        cc_builder.flag("-gencode=arch=compute_86,code=sm_86");
-        cc_builder.flag("-gencode=arch=compute_89,code=sm_89");
-        cc_builder.flag("-gencode=arch=compute_90,code=sm_90");
+        // --- QED-audit / GB10 (Grace-Blackwell, sm_121) patch ---
+        // Two problems on the GB10 with the CUDA 13 toolkit:
+        //   1. CUDA 13 dropped SASS codegen for sm_86 / sm_89 (the upstream targets),
+        //      so those `code=sm_8x` lines no longer compile.
+        //   2. Native sm_121 SASS emitted by CUDA 13's `ptxas` MISCOMPILES a heavy
+        //      kernel (NTT/LDE) -> the proof generates but fails verification
+        //      ("out-of-domain evaluation mismatch"). Base/extension field arithmetic
+        //      is correct on sm_121; only a complex kernel is miscompiled.
+        // Fix: emit ONLY compute_90 (Hopper) PTX and let the GPU driver JIT it to the
+        // running arch (sm_121) at load. The driver's JIT ptxas generates correct SASS.
+        // This also JITs correctly on Hopper/Ada/Ampere. To do AOT for a specific
+        // datacenter arch, add e.g. `-gencode=arch=compute_90,code=sm_90` below.
         cc_builder.flag("-gencode=arch=compute_90,code=compute_90");
 
         env::set_var("DEP_SPPARK_ROOT", "../sppark");
